@@ -42,7 +42,7 @@ def create_blur_levels(image, num_levels, blur_strength):
     blurred_images = [image]
     for i in range(1, num_levels + 1):
         sigma = i * blur_strength
-        blurred = cv2.GaussianBlur(image, (2, 2), sigmaX=sigma)
+        blurred = cv2.GaussianBlur(image, (3, 3), sigmaX=sigma)
         blurred_images.append(blurred)
     return blurred_images
 
@@ -174,7 +174,7 @@ if __name__ == "__main__":
     train_images, test_images = train_test_split(images, test_size=0.2, random_state=42)
     
     num_levels = 32
-    blur_strength = 0.01
+    blur_strength = 0.1
     epochs = 100
     batch_size = 64
     
