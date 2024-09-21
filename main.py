@@ -14,6 +14,7 @@ from tensorflow.keras.callbacks import TensorBoard
 import tensorboard
 import datetime
 import os
+from tensorflow.keras.models import load_model
 
 # Load the dataset
 def load_dataset(max_samples=50):
@@ -114,7 +115,7 @@ def unet_model(input_size=(128, 128, 3), model_name="unet"):
     output = Conv2D(3, 1, activation='sigmoid')(conv7)
 
     model = Model(inputs, output, name=model_name)
-    model.compile(optimizer=Adam(learning_rate=1e-4), loss=perceptual_loss(), metrics=['mae'])
+    model.compile(optimizer=Adam(learning_rate=1e-5), loss=perceptual_loss(), metrics=['mae'])
     
     return model
 
@@ -122,9 +123,23 @@ def unet_model(input_size=(128, 128, 3), model_name="unet"):
 def blur_batch(images, num_levels, blur_strength, noise=False, std=5):
     return np.array([create_blur_levels(image, num_levels, blur_strength, noise=noise, std=std) for image in images])
 
+def load_or_create_models(num_levels, model_name="unet", noise=False):
+    models = []
+    for i in range(1, num_levels + 1):
+        model_path = f'deblur_model_noise_level_{i}.h5' if noise else f'deblur_model_level_{i}.h5'
+        if os.path.exists(model_path):
+            print(f"Loading saved model: {model_path}")
+            model = load_model(model_path, custom_objects={'loss': perceptual_loss()})
+        else:
+            print(f"No saved model found. Creating new model: {model_name}_{i}")
+            model = unet_model(model_name=f"{model_name}_{i}")
+        models.append(model)
+    return models
+
 # Function to prepare train and validation sets
 def train_on_fiftyone_dataset(images, num_levels=5, blur_strength=2.0, batch_size=16, epochs=10, noise=False, std=5):
-    models = [unet_model(model_name=f"unet_level_{i+1}") for i in range(num_levels)]
+    # Load or create models
+    models = load_or_create_models(num_levels, model_name="unet", noise=noise)
     
     # Apply the blurring and prepare the dataset for training
     blurred_batches = blur_batch(images, num_levels, blur_strength, noise=noise, std=std)
@@ -140,7 +155,7 @@ def train_on_fiftyone_dataset(images, num_levels=5, blur_strength=2.0, batch_siz
         log_dir = os.path.join("logs", f"level_{i}", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
         tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1, write_graph=True, write_images=True)
         
-        # Train the model for each blur level
+        # Continue training the model for each blur level
         models[i - 1].fit(
             X_train, Y_train, 
             batch_size=batch_size, 
@@ -184,19 +199,22 @@ def visualize_results(models, test_images, num_levels, blur_strength, noise=Fals
     plt.close()
 
 if __name__ == "__main__":
-    dataset = load_dataset(max_samples=4096)
+    dataset = load_dataset(max_samples=64_000)
     images = get_images_from_dataset(dataset)
     
     # Split data into train and test sets
-    train_images, test_images = train_test_split(images, test_size=0.2, random_state=42)
+    train_images, test_images = train_test_split(images, test_size=0.2, random_state=72)
     
     # TODO: More Levels and Lower Blur Strength
-    num_levels = 16
+    num_levels = 12
     blur_strength = 0.1
-    epochs = 75
-    batch_size = 256
+    epochs = 10
+    batch_size = 512
     noise = True
     std = 0.01
+
+    # load saved models
+
     
     models = train_on_fiftyone_dataset(train_images, num_levels=num_levels, blur_strength=blur_strength, epochs=epochs, batch_size=batch_size, noise=noise, std=std)
 
