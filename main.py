@@ -37,12 +37,27 @@ def get_images_from_dataset(dataset, target_size=(128, 128)):
             images.append(image)
     return np.array(images)
 
+def add_noise(image, mean=0, std=10):
+    # Generate Gaussian noise
+    noise = np.random.normal(mean, std, image.shape).astype(np.float32)
+    
+    # Add noise to the image
+    noisy_image = image.astype(np.float32) + noise
+    
+    # Clip values to stay within valid image range [0, 255]
+    noisy_image = np.clip(noisy_image, 0, 255).astype(np.uint8)
+    
+    return noisy_image
+
 # Adjustable blur strength
-def create_blur_levels(image, num_levels, blur_strength):
+def create_blur_levels(image, num_levels, blur_strength, noise = False, std = 5):
     blurred_images = [image]
     for i in range(1, num_levels + 1):
         sigma = i * blur_strength
-        blurred = cv2.GaussianBlur(image, (3, 3), sigmaX=sigma)
+        if noise:
+            blurred = add_noise(image, std=std)
+        else:
+            blurred = cv2.GaussianBlur(image, (3, 3), sigmaX=sigma)
         blurred_images.append(blurred)
     return blurred_images
 
@@ -105,15 +120,15 @@ def unet_model(input_size=(128, 128, 3), model_name="unet"):
     return model
 
 # Function to blur batches of images
-def blur_batch(images, num_levels, blur_strength):
-    return np.array([create_blur_levels(image, num_levels, blur_strength) for image in images])
+def blur_batch(images, num_levels, blur_strength, noise=False, std=5):
+    return np.array([create_blur_levels(image, num_levels, blur_strength, noise=noise, std=std) for image in images])
 
 # Function to prepare train and validation sets
-def train_on_fiftyone_dataset(images, num_levels=5, blur_strength=2.0, batch_size=16, epochs=10):
+def train_on_fiftyone_dataset(images, num_levels=5, blur_strength=2.0, batch_size=16, epochs=10, noise=False, std=5):
     models = [unet_model(model_name=f"unet_level_{i+1}") for i in range(num_levels)]
     
     # Apply the blurring and prepare the dataset for training
-    blurred_batches = blur_batch(images, num_levels, blur_strength)
+    blurred_batches = blur_batch(images, num_levels, blur_strength, noise=noise, std=std)
     
     for i in range(1, num_levels + 1):
         X = np.array([batch[i] for batch in blurred_batches])  # Input: Blur `i`
@@ -137,12 +152,12 @@ def train_on_fiftyone_dataset(images, num_levels=5, blur_strength=2.0, batch_siz
     
     return models
 
-def visualize_results(models, test_images, num_levels, blur_strength):
+def visualize_results(models, test_images, num_levels, blur_strength, noise=False, std=5):
     num_images = min(5, len(test_images))  # Visualize up to 5 images
     fig, axes = plt.subplots(num_images, num_levels + 2, figsize=(3 * (num_levels + 2), 3 * num_images))
     
     for i, image in enumerate(test_images[:num_images]):
-        blurred_images = create_blur_levels(image, num_levels, blur_strength)
+        blurred_images = create_blur_levels(image, num_levels, blur_strength, noise=noise, std=std)
         
         # Original image
         axes[i, 0].imshow(image)
@@ -163,31 +178,37 @@ def visualize_results(models, test_images, num_levels, blur_strength):
             axes[i, j + 2].axis('off')
     
     plt.tight_layout()
-    plt.savefig('deblurring_results.png')
+    if noise:
+        plt.savefig('deblurring_results_noise.png')
+    else:
+        plt.savefig('deblurring_results.png')
     plt.close()
 
 if __name__ == "__main__":
-    dataset = load_dataset(max_samples=1024)
+    dataset = load_dataset(max_samples=2048)
     images = get_images_from_dataset(dataset)
     
     # Split data into train and test sets
     train_images, test_images = train_test_split(images, test_size=0.2, random_state=42)
     
+    # TODO: More Levels and Lower Blur Strength
     num_levels = 32
     blur_strength = 0.1
     epochs = 100
     batch_size = 64
+    noise = True
+    std = 1.025
     
-    models = train_on_fiftyone_dataset(train_images, num_levels=num_levels, blur_strength=blur_strength, epochs=epochs, batch_size=batch_size)
+    models = train_on_fiftyone_dataset(train_images, num_levels=num_levels, blur_strength=blur_strength, epochs=epochs, batch_size=batch_size, noise=noise, std=std)
 
     # Save the models
     for i, model in enumerate(models):
-        model.save(f'deblur_model_level_{i+1}.h5')
+        model.save(f'deblur_model_noise_level_{i+1}.h5')
 
     print("Training complete. Models saved.")
 
     # Visualize results
-    visualize_results(models, test_images, num_levels, blur_strength)
+    visualize_results(models, test_images, num_levels, blur_strength, noise=noise, std=std)
     print("Results visualized and saved as 'deblurring_results.png'")
     
     print("To view TensorBoard logs, run:")
