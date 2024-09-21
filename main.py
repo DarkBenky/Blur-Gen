@@ -37,16 +37,15 @@ def get_images_from_dataset(dataset, target_size=(128, 128)):
             images.append(image)
     return np.array(images)
 
-def add_noise(image, mean=0, std=10):
-    # Generate Gaussian noise
-    noise = np.random.normal(mean, std, image.shape).astype(np.float32)
+def add_noise(image, std=10):
+    # Calculate the mean intensity of the image
+    mean_intensity = np.mean(image)
+    
+    # Generate Gaussian noise with the mean of the image and a given standard deviation
+    noise = np.random.normal(mean_intensity, std, image.shape).astype(np.float32)
     
     # Add noise to the image
     noisy_image = image.astype(np.float32) + noise
-    
-    # Clip values to stay within valid image range [0, 255]
-    noisy_image = np.clip(noisy_image, 0, 255).astype(np.uint8)
-    
     return noisy_image
 
 # Adjustable blur strength
@@ -185,19 +184,19 @@ def visualize_results(models, test_images, num_levels, blur_strength, noise=Fals
     plt.close()
 
 if __name__ == "__main__":
-    dataset = load_dataset(max_samples=2048)
+    dataset = load_dataset(max_samples=4096)
     images = get_images_from_dataset(dataset)
     
     # Split data into train and test sets
     train_images, test_images = train_test_split(images, test_size=0.2, random_state=42)
     
     # TODO: More Levels and Lower Blur Strength
-    num_levels = 32
+    num_levels = 16
     blur_strength = 0.1
-    epochs = 100
-    batch_size = 64
+    epochs = 75
+    batch_size = 256
     noise = True
-    std = 1.025
+    std = 0.01
     
     models = train_on_fiftyone_dataset(train_images, num_levels=num_levels, blur_strength=blur_strength, epochs=epochs, batch_size=batch_size, noise=noise, std=std)
 
