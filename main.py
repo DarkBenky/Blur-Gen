@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 from tensorflow.keras.applications import VGG19
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, UpSampling2D, concatenate, Input
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, UpSampling2D, concatenate, Input , BatchNormalization, LeakyReLU
 from tensorflow.keras.optimizers import Adam
 import matplotlib.pyplot as plt
 import fiftyone as fo
@@ -15,6 +15,8 @@ import tensorboard
 import datetime
 import os
 from tensorflow.keras.models import load_model
+from tensorflow.keras.losses import MeanSquaredError
+from tensorflow.keras.callbacks import TensorBoard, ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 
 # Load the dataset
 def load_dataset(max_samples=50):
@@ -65,58 +67,67 @@ def create_blur_levels(image, num_levels, blur_strength, noise = False, std = 5)
 def perceptual_loss():
     vgg = VGG19(include_top=False, weights='imagenet', input_shape=(128, 128, 3))
     vgg.trainable = False
-    loss_model = Model(vgg.input, vgg.get_layer('block5_conv4').output)
+    loss_model = Model(vgg.input, vgg.get_layer('block3_conv3').output)
     loss_model.trainable = False
     
+    mse = MeanSquaredError()
+    
     def loss(y_true, y_pred):
-        y_true = preprocess_input(y_true * 255.0)  # Scale back to 0-255 range
-        y_pred = preprocess_input(y_pred * 255.0)
-        return tf.reduce_mean(tf.square(loss_model(y_true) - loss_model(y_pred)))
+        content_loss = mse(loss_model(y_true), loss_model(y_pred))
+        pixel_loss = mse(y_true, y_pred)
+        return content_loss + pixel_loss
     
     return loss
 
 # U-Net model architecture
 def unet_model(input_size=(128, 128, 3), model_name="unet"):
     inputs = Input(input_size)
-
+    
     # Encoder
-    conv1 = Conv2D(64, 3, activation='relu', padding='same')(inputs)
-    conv1 = Conv2D(64, 3, activation='relu', padding='same')(conv1)
-    pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
-
-    conv2 = Conv2D(128, 3, activation='relu', padding='same')(pool1)
-    conv2 = Conv2D(128, 3, activation='relu', padding='same')(conv2)
-    pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
-
-    conv3 = Conv2D(256, 3, activation='relu', padding='same')(pool2)
-    conv3 = Conv2D(256, 3, activation='relu', padding='same')(conv3)
-    pool3 = MaxPooling2D(pool_size=(2, 2))(conv3)
-
-    # Bottleneck
-    conv4 = Conv2D(512, 3, activation='relu', padding='same')(pool3)
-    conv4 = Conv2D(512, 3, activation='relu', padding='same')(conv4)
+    def encoder_block(x, filters, kernel_size=3, padding='same'):
+        x = Conv2D(filters, kernel_size, padding=padding)(x)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(alpha=0.2)(x)
+        x = Conv2D(filters, kernel_size, padding=padding)(x)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(alpha=0.2)(x)
+        return x
 
     # Decoder
-    up5 = UpSampling2D(size=(2, 2))(conv4)
-    merge5 = concatenate([conv3, up5], axis=3)
-    conv5 = Conv2D(256, 3, activation='relu', padding='same')(merge5)
-    conv5 = Conv2D(256, 3, activation='relu', padding='same')(conv5)
+    def decoder_block(x, skip_features, filters, kernel_size=3, padding='same'):
+        x = UpSampling2D((2, 2))(x)
+        x = concatenate([x, skip_features])
+        x = Conv2D(filters, kernel_size, padding=padding)(x)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(alpha=0.2)(x)
+        x = Conv2D(filters, kernel_size, padding=padding)(x)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(alpha=0.2)(x)
+        return x
 
-    up6 = UpSampling2D(size=(2, 2))(conv5)
-    merge6 = concatenate([conv2, up6], axis=3)
-    conv6 = Conv2D(128, 3, activation='relu', padding='same')(merge6)
-    conv6 = Conv2D(128, 3, activation='relu', padding='same')(conv6)
+    # Encoder
+    e1 = encoder_block(inputs, 64)
+    p1 = MaxPooling2D((2, 2))(e1)
+    e2 = encoder_block(p1, 128)
+    p2 = MaxPooling2D((2, 2))(e2)
+    e3 = encoder_block(p2, 256)
+    p3 = MaxPooling2D((2, 2))(e3)
+    e4 = encoder_block(p3, 512)
+    p4 = MaxPooling2D((2, 2))(e4)
 
-    up7 = UpSampling2D(size=(2, 2))(conv6)
-    merge7 = concatenate([conv1, up7], axis=3)
-    conv7 = Conv2D(64, 3, activation='relu', padding='same')(merge7)
-    conv7 = Conv2D(64, 3, activation='relu', padding='same')(conv7)
+    # Bridge
+    b = encoder_block(p4, 1024)
 
-    output = Conv2D(3, 1, activation='sigmoid')(conv7)
+    # Decoder
+    d1 = decoder_block(b, e4, 512)
+    d2 = decoder_block(d1, e3, 256)
+    d3 = decoder_block(d2, e2, 128)
+    d4 = decoder_block(d3, e1, 64)
 
-    model = Model(inputs, output, name=model_name)
-    model.compile(optimizer=Adam(learning_rate=1e-5), loss=perceptual_loss(), metrics=['mae'])
-    
+    # Output
+    outputs = Conv2D(3, 1, activation='sigmoid')(d4)
+
+    model = Model(inputs, outputs, name=model_name)
     return model
 
 # Function to blur batches of images
@@ -138,31 +149,35 @@ def load_or_create_models(num_levels, model_name="unet", noise=False):
 
 # Function to prepare train and validation sets
 def train_on_fiftyone_dataset(images, num_levels=5, blur_strength=2.0, batch_size=16, epochs=10, noise=False, std=5):
-    # Load or create models
-    models = load_or_create_models(num_levels, model_name="unet", noise=noise)
-    
-    # Apply the blurring and prepare the dataset for training
-    blurred_batches = blur_batch(images, num_levels, blur_strength, noise=noise, std=std)
-    
+    models = []
     for i in range(1, num_levels + 1):
-        X = np.array([batch[i] for batch in blurred_batches])  # Input: Blur `i`
-        Y = np.array([batch[i - 1] for batch in blurred_batches])  # Output: Predict previous blur level
+        model = unet_model(model_name=f"unet_{i}")
+        model.compile(optimizer=Adam(learning_rate=1e-4), loss=perceptual_loss())
         
-        # Split into training and validation sets
+        blurred_batches = blur_batch(images, num_levels, blur_strength, noise=noise, std=std)
+        
+        X = np.array([batch[i] for batch in blurred_batches])
+        Y = np.array([batch[i - 1] for batch in blurred_batches])
+        
         X_train, X_val, Y_train, Y_val = train_test_split(X, Y, test_size=0.2)
         
-        # Set up TensorBoard callback
         log_dir = os.path.join("logs", f"level_{i}", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-        tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1, write_graph=True, write_images=True)
+        callbacks = [
+            TensorBoard(log_dir=log_dir, histogram_freq=1, write_graph=True, write_images=True),
+            ModelCheckpoint(f'best_model_level_{i}.h5', save_best_only=True, monitor='val_loss'),
+            EarlyStopping(patience=10, restore_best_weights=True),
+            ReduceLROnPlateau(factor=0.5, patience=5, min_lr=1e-6)
+        ]
         
-        # Continue training the model for each blur level
-        models[i - 1].fit(
+        model.fit(
             X_train, Y_train, 
             batch_size=batch_size, 
             epochs=epochs,
             validation_data=(X_val, Y_val),
-            callbacks=[tensorboard_callback]
+            callbacks=callbacks
         )
+        
+        models.append(model)
     
     return models
 
@@ -225,7 +240,7 @@ if __name__ == "__main__":
     epochs = 100
     batch_size = 1024
     noise = True
-    std = 0.2
+    std = 0.15
 
     # load saved models
 
