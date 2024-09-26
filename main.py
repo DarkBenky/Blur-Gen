@@ -213,14 +213,14 @@ def visualize_results(models, test_images, num_levels, blur_strength, noise=Fals
     plt.close()
 
 if __name__ == "__main__":
-    dataset = load_dataset(max_samples=128_000)
+    dataset = load_dataset(max_samples=256_000)
     images = get_images_from_dataset(dataset)
     
     # Split data into train and test sets
     train_images, test_images = train_test_split(images, test_size=0.2, random_state=72)
     
     # TODO: More Levels and Lower Blur Strength
-    num_levels = 4
+    num_levels = 8
     blur_strength = 0.1
     epochs = 100
     batch_size = 1024
