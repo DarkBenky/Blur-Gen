@@ -168,7 +168,8 @@ def train_on_fiftyone_dataset(images, num_levels=5, blur_strength=2.0, batch_siz
 
 def visualize_results(models, test_images, num_levels, blur_strength, noise=False, std=5):
     num_images = min(5, len(test_images))  # Visualize up to 5 images
-    fig, axes = plt.subplots(num_images, num_levels + 2, figsize=(3 * (num_levels + 2), 3 * num_images))
+    # Adjust the number of columns to account for the random noise and its deblurring steps (+1 for noise and +number of models for deblurring it)
+    fig, axes = plt.subplots(num_images, num_levels + len(models) + 3, figsize=(3 * (num_levels + len(models) + 3), 3 * num_images))
     
     for i, image in enumerate(test_images[:num_images]):
         blurred_images = create_blur_levels(image, num_levels, blur_strength, noise=noise, std=std)
@@ -190,6 +191,19 @@ def visualize_results(models, test_images, num_levels, blur_strength, noise=Fals
             axes[i, j + 2].imshow(np.clip(deblurred, 0, 1))
             axes[i, j + 2].set_title(f'Deblur {j + 1}')
             axes[i, j + 2].axis('off')
+
+    # Random noise image generation and visualization
+    random_noise = np.random.normal(0, 1, test_images[0].shape)  # Match noise size to the test image shape
+    axes[0, num_levels + 2].imshow(np.clip(random_noise, 0, 1))
+    axes[0, num_levels + 2].set_title('Random Noise')
+    axes[0, num_levels + 2].axis('off')
+
+    # Deblurring the random noise image
+    for j, model in enumerate(reversed(models)):
+        random_noise = model.predict(np.expand_dims(random_noise, 0))[0]
+        axes[0, j + num_levels + 3].imshow(np.clip(random_noise, 0, 1))
+        axes[0, j + num_levels + 3].set_title(f'Deblur {j + 1}')
+        axes[0, j + num_levels + 3].axis('off')
     
     plt.tight_layout()
     if noise:
@@ -199,19 +213,19 @@ def visualize_results(models, test_images, num_levels, blur_strength, noise=Fals
     plt.close()
 
 if __name__ == "__main__":
-    dataset = load_dataset(max_samples=64_000)
+    dataset = load_dataset(max_samples=128_000)
     images = get_images_from_dataset(dataset)
     
     # Split data into train and test sets
     train_images, test_images = train_test_split(images, test_size=0.2, random_state=72)
     
     # TODO: More Levels and Lower Blur Strength
-    num_levels = 12
+    num_levels = 4
     blur_strength = 0.1
-    epochs = 10
-    batch_size = 512
+    epochs = 100
+    batch_size = 1024
     noise = True
-    std = 0.01
+    std = 0.2
 
     # load saved models
 
