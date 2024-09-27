@@ -67,15 +67,13 @@ def create_blur_levels(image, num_levels, blur_strength, noise = False, std = 5)
 def perceptual_loss():
     vgg = VGG19(include_top=False, weights='imagenet', input_shape=(128, 128, 3))
     vgg.trainable = False
-    loss_model = Model(vgg.input, vgg.get_layer('block3_conv3').output)
+    loss_model = Model(vgg.input, vgg.get_layer('block5_conv4').output)
     loss_model.trainable = False
     
-    mse = MeanSquaredError()
-    
     def loss(y_true, y_pred):
-        content_loss = mse(loss_model(y_true), loss_model(y_pred))
-        pixel_loss = mse(y_true, y_pred)
-        return content_loss + pixel_loss
+        y_true = preprocess_input(y_true * 255.0)  # Scale back to 0-255 range
+        y_pred = preprocess_input(y_pred * 255.0)
+        return tf.reduce_mean(tf.square(loss_model(y_true) - loss_model(y_pred)))
     
     return loss
 
@@ -151,6 +149,11 @@ def load_or_create_models(num_levels, model_name="unet", noise=False):
 def train_on_fiftyone_dataset(images, num_levels=5, blur_strength=2.0, batch_size=16, epochs=10, noise=False, std=5):
     models = []
     for i in range(1, num_levels + 1):
+        # check if model exists
+        if os.path.exists(f'best_model_level_{i}.h5'):
+            print(f"Loading saved model: best_model_level_{i}.h5")
+            model = load_model(f'best_model_level_{i}.h5', custom_objects={'loss': perceptual_loss()})
+
         model = unet_model(model_name=f"unet_{i}")
         model.compile(optimizer=Adam(learning_rate=1e-4), loss=perceptual_loss())
         
@@ -237,10 +240,10 @@ if __name__ == "__main__":
     # TODO: More Levels and Lower Blur Strength
     num_levels = 8
     blur_strength = 0.1
-    epochs = 100
-    batch_size = 1024
+    epochs = 25
+    batch_size = 128
     noise = True
-    std = 0.15
+    std = 0.025
 
     # load saved models
 
